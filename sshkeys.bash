@@ -9,7 +9,10 @@ PASS_DIR="$PASSWORD_STORE_DIR"
 VERBOSE=0
 
 # Helper functions
-die() { echo "Error: $*" >&2; exit 1; }
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
 debug() { [[ $VERBOSE -eq 1 ]] && echo "DEBUG: $*" >&2; }
 yesno() {
     local answer
@@ -44,7 +47,7 @@ cmd_import_with_deps() {
             debug "Skipping comment line"
             continue
         fi
-        if (( in_block )); then
+        if ((in_block)); then
             if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+ ]]; then
                 debug "Found next Host block, stopping"
                 break
@@ -58,9 +61,9 @@ cmd_import_with_deps() {
                 host_block+=("$line")
             fi
         fi
-    done < "$CONFIG_FILE"
+    done <"$CONFIG_FILE"
 
-    (( ${#host_block[@]} )) || die "Host '$hostname' not found in $CONFIG_FILE"
+    ((${#host_block[@]})) || die "Host '$hostname' not found in $CONFIG_FILE"
     debug "Found ${#host_block[@]} lines in host block"
 
     # Check for ProxyJump directive and import dependencies
@@ -70,7 +73,7 @@ cmd_import_with_deps() {
         debug "Checking line for ProxyJump: $line"
         if [[ "$line" =~ ^[[:space:]]*[Pp][Rr][Oo][Xx][Yy][Jj][Uu][Mm][Pp][[:space:]]+([^[:space:]]+) ]]; then
             debug "Found ProxyJump directive: ${BASH_REMATCH[1]}"
-            IFS=',' read -ra proxy_hosts <<< "${BASH_REMATCH[1]}"
+            IFS=',' read -ra proxy_hosts <<<"${BASH_REMATCH[1]}"
             for proxy in "${proxy_hosts[@]}"; do
                 # Remove leading/trailing whitespace
                 proxy="${proxy#"${proxy%%[![:space:]]*}"}"
@@ -95,11 +98,12 @@ cmd_import_with_deps() {
     local identity_files=()
     local identity_paths=()
     for line in "${host_block[@]}"; do
-        if [[ "$line" =~ ^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
+        debug "Checking line for IdentityFile: $line"
+        if [[ "$line" =~ ^[[:space:]]*[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
             identity_file="${BASH_REMATCH[1]}"
             debug "Found IdentityFile: $identity_file"
             identity_files+=("$identity_file")
-            
+
             # Store original path relative to SSH_DIR
             if [[ "$identity_file" == "$SSH_DIR"/* ]]; then
                 rel_path="${identity_file#$SSH_DIR/}"
@@ -116,7 +120,7 @@ cmd_import_with_deps() {
     for i in "${!identity_files[@]}"; do
         identity_file="${identity_files[$i]}"
         rel_path="${identity_paths[$i]}"
-        debug "Processing IdentityFile $((i+1))/${#identity_files[@]}: $identity_file"
+        debug "Processing IdentityFile $((i + 1))/${#identity_files[@]}: $identity_file"
 
         # Expand path
         local expanded_path="${identity_file/#\~/$HOME}"
@@ -133,7 +137,7 @@ cmd_import_with_deps() {
         if [[ -f "$expanded_path" ]]; then
             # Determine store path
             local rel_path="${expanded_path#$SSH_DIR/}"
-            rel_path="${rel_path//../_dotdot_}"  # Sanitize ..
+            rel_path="${rel_path//../_dotdot_}" # Sanitize ..
             debug "Sanitized relative path: $rel_path"
 
             local store_path="ssh/$hostname/$rel_path"
@@ -146,7 +150,7 @@ cmd_import_with_deps() {
 
             # Insert into pass
             debug "Inserting key into pass store"
-            pass insert --multiline "$store_path" < "$expanded_path" || die "Failed to insert $store_path"
+            pass insert --multiline "$store_path" <"$expanded_path" || die "Failed to insert $store_path"
         else
             debug "IdentityFile not found: $expanded_path"
             echo "Skipping non-existent IdentityFile: $identity_file"
@@ -186,7 +190,7 @@ cmd_export() {
         if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+([^#]+) ]]; then
             existing_patterns+=("${BASH_REMATCH[1]}")
         fi
-    done < "$CONFIG_FILE"
+    done <"$CONFIG_FILE"
 
     # Check if exported Host patterns exist
     local exported_patterns
@@ -207,7 +211,7 @@ cmd_export() {
         done
     done
 
-    if (( conflict )) && ! yesno "Overwrite conflicting Host entries?"; then
+    if ((conflict)) && ! yesno "Overwrite conflicting Host entries?"; then
         die "Export aborted"
     fi
 
@@ -234,19 +238,19 @@ cmd_export() {
         in_block { next }
         delete_lines { delete_lines=0; next }
         { print }
-    ' "$backup" > "$CONFIG_FILE" || die "Failed to remove conflicts"
+    ' "$backup" >"$CONFIG_FILE" || die "Failed to remove conflicts"
 
     # Append new Host block
     echo "Appending Host block for $hostname to $CONFIG_FILE"
-    echo "$host_block" >> "$CONFIG_FILE"
+    echo "$host_block" >>"$CONFIG_FILE"
 
     # Export IdentityFiles
     local identity_files=()
     while IFS= read -r line; do
-        if [[ "$line" =~ ^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
+        if [[ "$line" =~ ^[[:space:]]*[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
             identity_files+=("${BASH_REMATCH[1]}")
         fi
-    done <<< "$host_block"
+    done <<<"$host_block"
 
     for identity_file in "${identity_files[@]}"; do
         local expanded_path="${identity_file/#\~/$HOME}"
@@ -273,7 +277,7 @@ cmd_export() {
 
         echo "Exporting $store_path to $expanded_path"
         mkdir -p "$(dirname "$expanded_path")"
-        pass show "$store_path" > "$expanded_path"
+        pass show "$store_path" >"$expanded_path"
         chmod 600 "$expanded_path"
     done
 
@@ -290,7 +294,7 @@ cmd_import_all() {
             echo "Importing host: $hostname"
             cmd_import_with_deps "$hostname" || echo "Failed to import $hostname"
         fi
-    done < "$CONFIG_FILE"
+    done <"$CONFIG_FILE"
 }
 
 cmd_export_all() {
@@ -315,7 +319,13 @@ cmd_connect() {
 
     # Create temporary directory for keys
     local tmp_dir=$(mktemp -d)
+    debug "Created temporary directory: $tmp_dir"
     trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Create empty temporary SSH config
+    local tmp_config="$tmp_dir/config"
+    touch "$tmp_config"
+    debug "Created temporary config: $tmp_config"
 
     # Function to process a host and its ProxyJump dependencies
     process_host() {
@@ -326,15 +336,18 @@ cmd_connect() {
         local config_store="ssh/$host/config"
         local host_block
         host_block=$(pass show "$config_store" 2>/dev/null) || die "No config found for $host"
+        debug "Retrieved host block from $config_store:"
+        debug "$host_block"
 
         # Append to temporary SSH config
-        echo "$host_block" >> "$tmp_config"
+        echo "$host_block" >>"$tmp_config"
 
         # Extract and restore keys
         while IFS= read -r line; do
+            debug "Processing config line: $line"
             if [[ "$line" =~ ^[[:space:]]*[Pp][Rr][Oo][Xx][Yy][Jj][Uu][Mm][Pp][[:space:]]+([^[:space:]]+) ]]; then
                 debug "Found ProxyJump: ${BASH_REMATCH[1]}"
-                IFS=',' read -ra proxy_hosts <<< "${BASH_REMATCH[1]}"
+                IFS=',' read -ra proxy_hosts <<<"${BASH_REMATCH[1]}"
                 for proxy in "${proxy_hosts[@]}"; do
                     # Remove leading/trailing whitespace
                     proxy="${proxy#"${proxy%%[![:space:]]*}"}"
@@ -344,60 +357,87 @@ cmd_connect() {
                         process_host "$proxy"
                     fi
                 done
-            elif [[ "$line" =~ ^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
+            elif [[ "$line" =~ ^[[:space:]]*[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
                 local identity_file="${BASH_REMATCH[1]}"
+                debug "Found IdentityFile: $identity_file"
+
                 local expanded_path="${identity_file/#\~/$HOME}"
                 expanded_path=$(realpath -m "$expanded_path")
+                debug "Expanded path: $expanded_path"
 
                 # Resolve relative to SSH_DIR if needed
                 if [[ "$expanded_path" != "$SSH_DIR"/* ]]; then
+                    debug "Path not under SSH_DIR, adjusting"
                     expanded_path="$SSH_DIR/$identity_file"
                 fi
+                debug "Final expanded path: $expanded_path"
 
                 local rel_path="${expanded_path#$SSH_DIR/}"
                 rel_path="${rel_path//../_dotdot_}"
                 local store_path="ssh/$host/$rel_path"
                 local tmp_key="$tmp_dir/$(basename "$identity_file")"
+                debug "Store path: $store_path"
+                debug "Temporary key path: $tmp_key"
 
                 # Restore key to temporary location
-                if pass show "$store_path" > "$tmp_key" 2>/dev/null; then
+                if pass show "$store_path" >"$tmp_key" 2>/dev/null; then
                     chmod 600 "$tmp_key"
                     debug "Restored key $store_path to $tmp_key"
                     # Update config to use temporary key
+                    debug "Updating config to use temporary key"
+                    debug "Replacing: $identity_file"
+                    debug "With: $tmp_key"
                     sed -i "s|${identity_file}|${tmp_key}|g" "$tmp_config"
                 else
+                    debug "Failed to retrieve key from $store_path"
                     echo "Warning: Key $store_path not found in pass"
                 fi
             fi
-        done <<< "$host_block"
-    }
+        done <<<"$host_block"
 
-    # Create empty temporary SSH config
-    local tmp_config="$tmp_dir/config"
-    touch "$tmp_config"
+        debug "Finished processing host: $host"
+        debug "Current temporary config contents:"
+        debug "$(cat "$tmp_config")"
+    }
 
     # Process the main host and its dependencies
     process_host "$hostname"
 
     # Execute SSH command with temporary config
     echo "Connecting to $hostname..."
+    debug "Running: ssh -F \"$tmp_config\" \"$hostname\""
     ssh -F "$tmp_config" "$hostname"
 }
 
 # Main command handler
 case "$1" in
-    -v|--verbose)
-        VERBOSE=1
-        debug "Verbose mode enabled"
-        shift
-        ;;
+-v | --verbose)
+    VERBOSE=1
+    debug "Verbose mode enabled"
+    shift
+    ;;
 esac
 
 case "$1" in
-    import) shift; cmd_import_with_deps "$@" ;;
-    import-all) shift; cmd_import_all ;;
-    export) shift; cmd_export "$@" ;;
-    export-all) shift; cmd_export_all ;;
-    connect) shift; cmd_connect "$@" ;;
-    *) die "Usage: pass ssh [-v|--verbose] import|import-all|export|export-all|connect [hostname]" ;;
+import)
+    shift
+    cmd_import_with_deps "$@"
+    ;;
+import-all)
+    shift
+    cmd_import_all
+    ;;
+export)
+    shift
+    cmd_export "$@"
+    ;;
+export-all)
+    shift
+    cmd_export_all
+    ;;
+connect)
+    shift
+    cmd_connect "$@"
+    ;;
+*) die "Usage: pass ssh [-v|--verbose] import|import-all|export|export-all|connect [hostname]" ;;
 esac
