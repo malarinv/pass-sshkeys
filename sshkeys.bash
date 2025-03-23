@@ -177,7 +177,14 @@ cmd_import() {
 # Export SSH keys and config from pass
 cmd_export() {
     local hostname="$1"
+    local backup="$2" # New parameter to receive backup path
     [[ -z "$hostname" ]] && die "Usage: pass ssh export <hostname>"
+
+    # Only create backup if not provided (single host export)
+    if [[ -z "$backup" ]]; then
+        backup="${CONFIG_FILE}.bak.$(date +%s)"
+        cp "$CONFIG_FILE" "$backup" || die "Failed to backup config"
+    fi
 
     # Retrieve Host block
     local config_store="ssh/$hostname/config"
@@ -214,10 +221,6 @@ cmd_export() {
     if ((conflict)) && ! yesno "Overwrite conflicting Host entries?"; then
         die "Export aborted"
     fi
-
-    # Backup original config
-    local backup="${CONFIG_FILE}.bak.$(date +%s)"
-    cp "$CONFIG_FILE" "$backup" || die "Failed to backup config"
 
     # Remove conflicting Host blocks
     awk -v patterns="$exported_patterns" '
@@ -299,6 +302,11 @@ cmd_import_all() {
 
 cmd_export_all() {
     echo "Exporting all hosts to $CONFIG_FILE"
+
+    # Create single backup for all exports
+    local backup="${CONFIG_FILE}.bak.$(date +%s)"
+    cp "$CONFIG_FILE" "$backup" || die "Failed to backup config"
+
     local hosts=()
     while IFS= read -r -d '' path; do
         if [[ "$path" =~ ^ssh/([^/]+)/config ]]; then
@@ -308,8 +316,10 @@ cmd_export_all() {
 
     for host in "${hosts[@]}"; do
         echo "Exporting host: $host"
-        cmd_export "$host" || echo "Failed to export $host"
+        cmd_export "$host" "$backup" || echo "Failed to export $host"
     done
+
+    echo "Export complete. Original config backed up to $backup"
 }
 
 # Connect directly using stored keys
