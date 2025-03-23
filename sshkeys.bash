@@ -6,34 +6,54 @@ VERSION="0.1.0"
 SSH_DIR="$HOME/.ssh"
 CONFIG_FILE="$SSH_DIR/config"
 PASS_DIR="$PASSWORD_STORE_DIR"
+VERBOSE=0
 
 # Helper functions
 die() { echo "Error: $*" >&2; exit 1; }
+debug() { [[ $VERBOSE -eq 1 ]] && echo "DEBUG: $*" >&2; }
 yesno() {
     local answer
     read -r -p "$1 [y/N] " answer
     [[ "$answer" =~ [Yy] ]]
 }
 
-# Import SSH keys and config into pass
-cmd_import() {
+# Import a host and its dependencies
+cmd_import_with_deps() {
     local hostname="$1"
+    local is_dep="${2:-false}"
     [[ -z "$hostname" ]] && die "Usage: pass ssh import <hostname>"
 
+    debug "Starting import for host: $hostname (dependency: $is_dep)"
+
+    # Skip if already imported in this session
+    local imported_key="imported_$hostname"
+    if [[ "${!imported_key}" == "1" ]]; then
+        debug "Host $hostname already imported in this session, skipping"
+        return
+    fi
+    declare -g "$imported_key=1"
+    debug "Marking $hostname as imported"
+
     # Find Host block in SSH config
+    debug "Searching for Host block in $CONFIG_FILE"
     local in_block=0
     local host_block=()
     while IFS= read -r line; do
+        debug "Processing line: $line"
         if [[ "$line" =~ ^[[:space:]]*# ]]; then
-            continue  # Skip comments
+            debug "Skipping comment line"
+            continue
         fi
         if (( in_block )); then
             if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+ ]]; then
+                debug "Found next Host block, stopping"
                 break
             fi
+            debug "Adding line to host block"
             host_block+=("$line")
         else
             if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+$hostname([[:space:]]+|$) ]]; then
+                debug "Found matching Host block"
                 in_block=1
                 host_block+=("$line")
             fi
@@ -41,13 +61,43 @@ cmd_import() {
     done < "$CONFIG_FILE"
 
     (( ${#host_block[@]} )) || die "Host '$hostname' not found in $CONFIG_FILE"
+    debug "Found ${#host_block[@]} lines in host block"
+
+    # Check for ProxyJump directive and import dependencies
+    debug "Checking for ProxyJump directives"
+    local proxy_hosts=()
+    for line in "${host_block[@]}"; do
+        debug "Checking line for ProxyJump: $line"
+        if [[ "$line" =~ ^[[:space:]]*[Pp][Rr][Oo][Xx][Yy][Jj][Uu][Mm][Pp][[:space:]]+([^[:space:]]+) ]]; then
+            debug "Found ProxyJump directive: ${BASH_REMATCH[1]}"
+            IFS=',' read -ra proxy_hosts <<< "${BASH_REMATCH[1]}"
+            for proxy in "${proxy_hosts[@]}"; do
+                # Remove leading/trailing whitespace
+                proxy="${proxy#"${proxy%%[![:space:]]*}"}"
+                proxy="${proxy%"${proxy##*[![:space:]]}"}"
+                debug "Processing proxy host: $proxy"
+                if [[ "$proxy" != "none" && "$proxy" != "NONE" ]]; then
+                    if $is_dep; then
+                        echo "    Importing nested ProxyJump dependency: $proxy"
+                    else
+                        echo "Importing ProxyJump dependency: $proxy"
+                    fi
+                    cmd_import_with_deps "$proxy" true
+                else
+                    debug "Skipping 'none' ProxyJump value"
+                fi
+            done
+        fi
+    done
 
     # Extract IdentityFiles and paths
+    debug "Extracting IdentityFiles"
     local identity_files=()
     local identity_paths=()
     for line in "${host_block[@]}"; do
         if [[ "$line" =~ ^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
             identity_file="${BASH_REMATCH[1]}"
+            debug "Found IdentityFile: $identity_file"
             identity_files+=("$identity_file")
             
             # Store original path relative to SSH_DIR
@@ -56,35 +106,68 @@ cmd_import() {
             else
                 rel_path="$identity_file"
             fi
+            debug "Relative path: $rel_path"
             identity_paths+=("$rel_path")
         fi
     done
 
     # Process each IdentityFile with path tracking
+    debug "Processing ${#identity_files[@]} IdentityFiles"
     for i in "${!identity_files[@]}"; do
         identity_file="${identity_files[$i]}"
         rel_path="${identity_paths[$i]}"
+        debug "Processing IdentityFile $((i+1))/${#identity_files[@]}: $identity_file"
+
+        # Expand path
+        local expanded_path="${identity_file/#\~/$HOME}"
+        expanded_path=$(realpath -m "$expanded_path")
+        debug "Expanded path: $expanded_path"
+
+        # Resolve relative to SSH_DIR if needed
+        if [[ "$expanded_path" != "$SSH_DIR"/* ]]; then
+            debug "Path not under SSH_DIR, adjusting"
+            expanded_path="$SSH_DIR/$identity_file"
+        fi
 
         # Check if private key exists
         if [[ -f "$expanded_path" ]]; then
             # Determine store path
             local rel_path="${expanded_path#$SSH_DIR/}"
             rel_path="${rel_path//../_dotdot_}"  # Sanitize ..
+            debug "Sanitized relative path: $rel_path"
 
             local store_path="ssh/$hostname/$rel_path"
-            echo "Importing $expanded_path to $store_path"
+            debug "Store path: $store_path"
+            if $is_dep; then
+                echo "    Importing $expanded_path to $store_path"
+            else
+                echo "Importing $expanded_path to $store_path"
+            fi
 
             # Insert into pass
+            debug "Inserting key into pass store"
             pass insert --multiline "$store_path" < "$expanded_path" || die "Failed to insert $store_path"
         else
+            debug "IdentityFile not found: $expanded_path"
             echo "Skipping non-existent IdentityFile: $identity_file"
         fi
     done
 
     # Save Host block
     local config_store="ssh/$hostname/config"
-    echo "Storing Host block in $config_store"
+    debug "Saving Host block to $config_store"
+    if $is_dep; then
+        echo "    Storing Host block in $config_store"
+    else
+        echo "Storing Host block in $config_store"
+    fi
     printf "%s\n" "${host_block[@]}" | pass insert --multiline "$config_store" >/dev/null || die "Failed to save config"
+    debug "Host block saved successfully"
+}
+
+# Import SSH keys and config into pass
+cmd_import() {
+    cmd_import_with_deps "$1"
 }
 
 # Export SSH keys and config from pass
@@ -205,7 +288,7 @@ cmd_import_all() {
         if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+([^#[:space:]]+) ]]; then
             hostname="${BASH_REMATCH[1]}"
             echo "Importing host: $hostname"
-            cmd_import "$hostname" || echo "Failed to import $hostname"
+            cmd_import_with_deps "$hostname" || echo "Failed to import $hostname"
         fi
     done < "$CONFIG_FILE"
 }
@@ -225,11 +308,96 @@ cmd_export_all() {
     done
 }
 
+# Connect directly using stored keys
+cmd_connect() {
+    local hostname="$1"
+    [[ -z "$hostname" ]] && die "Usage: pass ssh connect <hostname>"
+
+    # Create temporary directory for keys
+    local tmp_dir=$(mktemp -d)
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    # Function to process a host and its ProxyJump dependencies
+    process_host() {
+        local host="$1"
+        debug "Processing host: $host"
+
+        # Retrieve Host block
+        local config_store="ssh/$host/config"
+        local host_block
+        host_block=$(pass show "$config_store" 2>/dev/null) || die "No config found for $host"
+
+        # Append to temporary SSH config
+        echo "$host_block" >> "$tmp_config"
+
+        # Extract and restore keys
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*[Pp][Rr][Oo][Xx][Yy][Jj][Uu][Mm][Pp][[:space:]]+([^[:space:]]+) ]]; then
+                debug "Found ProxyJump: ${BASH_REMATCH[1]}"
+                IFS=',' read -ra proxy_hosts <<< "${BASH_REMATCH[1]}"
+                for proxy in "${proxy_hosts[@]}"; do
+                    # Remove leading/trailing whitespace
+                    proxy="${proxy#"${proxy%%[![:space:]]*}"}"
+                    proxy="${proxy%"${proxy##*[![:space:]]}"}"
+                    if [[ "$proxy" != "none" && "$proxy" != "NONE" ]]; then
+                        debug "Processing ProxyJump host: $proxy"
+                        process_host "$proxy"
+                    fi
+                done
+            elif [[ "$line" =~ ^[Ii][Dd][Ee][Nn][Tt][Ii][Tt][Yy][Ff][Ii][Ll][Ee][[:space:]]+([^[:space:]]+) ]]; then
+                local identity_file="${BASH_REMATCH[1]}"
+                local expanded_path="${identity_file/#\~/$HOME}"
+                expanded_path=$(realpath -m "$expanded_path")
+
+                # Resolve relative to SSH_DIR if needed
+                if [[ "$expanded_path" != "$SSH_DIR"/* ]]; then
+                    expanded_path="$SSH_DIR/$identity_file"
+                fi
+
+                local rel_path="${expanded_path#$SSH_DIR/}"
+                rel_path="${rel_path//../_dotdot_}"
+                local store_path="ssh/$host/$rel_path"
+                local tmp_key="$tmp_dir/$(basename "$identity_file")"
+
+                # Restore key to temporary location
+                if pass show "$store_path" > "$tmp_key" 2>/dev/null; then
+                    chmod 600 "$tmp_key"
+                    debug "Restored key $store_path to $tmp_key"
+                    # Update config to use temporary key
+                    sed -i "s|${identity_file}|${tmp_key}|g" "$tmp_config"
+                else
+                    echo "Warning: Key $store_path not found in pass"
+                fi
+            fi
+        done <<< "$host_block"
+    }
+
+    # Create empty temporary SSH config
+    local tmp_config="$tmp_dir/config"
+    touch "$tmp_config"
+
+    # Process the main host and its dependencies
+    process_host "$hostname"
+
+    # Execute SSH command with temporary config
+    echo "Connecting to $hostname..."
+    ssh -F "$tmp_config" "$hostname"
+}
+
 # Main command handler
 case "$1" in
-    import) shift; cmd_import "$@" ;;
+    -v|--verbose)
+        VERBOSE=1
+        debug "Verbose mode enabled"
+        shift
+        ;;
+esac
+
+case "$1" in
+    import) shift; cmd_import_with_deps "$@" ;;
+    import-all) shift; cmd_import_all ;;
     export) shift; cmd_export "$@" ;;
-    import-all) shift; cmd_import_all "$@" ;;
-    export-all) shift; cmd_export_all "$@" ;;
-    *) die "Usage: pass ssh import|export|import-all|export-all <hostname>" ;;
+    export-all) shift; cmd_export_all ;;
+    connect) shift; cmd_connect "$@" ;;
+    *) die "Usage: pass ssh [-v|--verbose] import|import-all|export|export-all|connect [hostname]" ;;
 esac
