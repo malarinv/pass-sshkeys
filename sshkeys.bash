@@ -28,13 +28,15 @@ cmd_import_with_deps() {
 
     debug "Starting import for host: $hostname (dependency: $is_dep)"
 
+    # Sanitize hostname for variable name (replace non-alphanumeric chars with underscore)
+    local var_name="imported_$(echo "$hostname" | sed 's/[^a-zA-Z0-9]/_/g')"
+
     # Skip if already imported in this session
-    local imported_key="imported_$hostname"
-    if [[ "${!imported_key}" == "1" ]]; then
+    if [[ "${!var_name}" == "1" ]]; then
         debug "Host $hostname already imported in this session, skipping"
-        return
+        return 0
     fi
-    declare -g "$imported_key=1"
+    declare -g "$var_name=1"
     debug "Marking $hostname as imported"
 
     # Find Host block in SSH config
@@ -167,6 +169,7 @@ cmd_import_with_deps() {
     fi
     printf "%s\n" "${host_block[@]}" | pass insert --multiline "$config_store" >/dev/null || die "Failed to save config"
     debug "Host block saved successfully"
+    return 0
 }
 
 # Import SSH keys and config into pass
@@ -291,13 +294,33 @@ cmd_export() {
 cmd_import_all() {
     echo "Importing all hosts from $CONFIG_FILE"
     local hostname=""
+    local failed_hosts=()
+    local success_count=0
+
     while IFS= read -r line; do
         if [[ "$line" =~ ^[Hh][Oo][Ss][Tt][[:space:]]+([^#[:space:]]+) ]]; then
             hostname="${BASH_REMATCH[1]}"
             echo "Importing host: $hostname"
-            cmd_import_with_deps "$hostname" || echo "Failed to import $hostname"
+            if cmd_import_with_deps "$hostname" 2>/dev/null; then
+                ((success_count++))
+            else
+                local exit_code=$?
+                failed_hosts+=("$hostname")
+                if ((exit_code != 0)); then
+                    echo "Failed to import $hostname"
+                fi
+            fi
         fi
     done <"$CONFIG_FILE"
+
+    # Summary
+    echo "Import complete: $success_count hosts imported successfully"
+    if ((${#failed_hosts[@]} > 0)); then
+        echo "Failed to import ${#failed_hosts[@]} hosts:"
+        printf '%s\n' "${failed_hosts[@]}"
+        return 1
+    fi
+    return 0
 }
 
 cmd_export_all() {
