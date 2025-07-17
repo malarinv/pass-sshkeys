@@ -53,7 +53,7 @@ alias pass='PASSWORD_STORE_ENABLE_EXTENSIONS=true pass'
 Import a single host:
 
 ```bash
-pass ssh import hostname
+pass sshkeys import hostname
 ```
 
 When importing a host, the extension automatically detects and handles ProxyJump configurations:
@@ -65,7 +65,7 @@ When importing a host, the extension automatically detects and handles ProxyJump
 Import all hosts from SSH config:
 
 ```bash
-pass ssh import-all
+pass sshkeys import-all
 ```
 
 ### Export SSH Keys and Config
@@ -73,13 +73,13 @@ pass ssh import-all
 Export a single host:
 
 ```bash
-pass ssh export hostname
+pass sshkeys export hostname
 ```
 
 Export all stored hosts:
 
 ```bash
-pass ssh export-all
+pass sshkeys export-all
 ```
 
 ### Direct Connection
@@ -87,7 +87,7 @@ pass ssh export-all
 Connect to a host using stored keys without importing:
 
 ```bash
-pass ssh connect hostname
+pass sshkeys connect hostname
 ```
 
 The connect command:

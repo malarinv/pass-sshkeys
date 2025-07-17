@@ -442,6 +442,20 @@ cmd_connect() {
     ssh -F "$tmp_config" "$hostname"
 }
 
+# Show help
+cmd_help() {
+    cat <<-_EOF
+Usage: pass ssh [-v|--verbose] import|import-all|export|export-all|connect [hostname]
+
+Commands:
+    import - Import a host and its dependencies from ~/.ssh/config.
+    import-all - Import all hosts from ~/.ssh/config.
+    export - Export a host and its dependencies to ~/.ssh/config.
+    export-all - Export all hosts to ~/.ssh/config.
+    connect - Connect to a host using the stored keys.
+_EOF
+}
+
 # Main command handler
 case "$1" in
 -v | --verbose)
@@ -471,6 +485,9 @@ export-all)
 connect)
     shift
     cmd_connect "$@"
+    ;;
+-h|--help|help)
+    cmd_help
     ;;
 *) die "Usage: pass ssh [-v|--verbose] import|import-all|export|export-all|connect [hostname]" ;;
 esac

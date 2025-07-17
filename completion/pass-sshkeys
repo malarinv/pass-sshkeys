@@ -1,0 +1,38 @@
+PASSWORD_STORE_EXTENSION_COMMANDS+=(sshkeys)
+
+__password_store_extension_complete_sshkeys() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local subcommand="${COMP_WORDS[2]}"
+
+    # If we are completing the subcommand itself (at index 2)
+    if [[ $COMP_CWORD -eq 2 ]]; then
+        COMPREPLY=($(compgen -W "import import-all export export-all connect -v --verbose -h --help" -- "$cur"))
+        return
+    fi
+
+    # If -v or --verbose is at index 2, we might be completing the subcommand at index 3
+    if [[ "${COMP_WORDS[2]}" == "-v" || "${COMP_WORDS[2]}" == "--verbose" ]]; then
+        if [[ $COMP_CWORD -eq 3 ]]; then
+            COMPREPLY=($(compgen -W "import import-all export export-all connect -h --help" -- "$cur"))
+            return
+        fi
+        # The actual subcommand is at index 3
+        subcommand="${COMP_WORDS[3]}"
+    fi
+
+    # We are completing an argument for a subcommand
+    case "$subcommand" in
+        import)
+            # Suggest hosts from ~/.ssh/config
+            if [[ -f "$HOME/.ssh/config" ]]; then
+                local hosts=$(awk '/^[Hh][Oo][Ss][Tt][[:space:]]/{for(i=2;i<=NF;i++){if($i~/#/){break};if($i!="*"){print $i}}}' "$HOME/.ssh/config" | sort -u)
+                COMPREPLY=($(compgen -W "$hosts" -- "$cur"))
+            fi
+            ;;
+        export|connect)
+            # Suggest hosts from the password store
+            local hosts=$(pass ls ssh 2>/dev/null | sed -e 's,^ssh/,,g' -e 's,/.*,,g' | sort -u)
+            COMPREPLY=($(compgen -W "$hosts" -- "$cur"))
+            ;;
+    esac
+}
